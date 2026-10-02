@@ -31,6 +31,8 @@ class OpenRouterClient:
         base_url: str = OPENROUTER_BASE_URL,
         app_name: str = "mini-harness",
         timeout: int = 120,
+        min_interval: float = 3.2,
+        max_retries: int = 8,
     ):
         if not api_key:
             raise OpenRouterError(
@@ -42,6 +44,17 @@ class OpenRouterClient:
         self.base_url = base_url.rstrip("/")
         self.app_name = app_name
         self.timeout = timeout
+        # Pacing + retries keep missions alive under the free-tier ~20 req/min limit.
+        self.min_interval = min_interval
+        self.max_retries = max_retries
+        self._last_call_ts = 0.0
+
+    def _pace(self):
+        """Space requests out so we stay under the per-minute rate limit."""
+        wait = self.min_interval - (time.time() - self._last_call_ts)
+        if wait > 0:
+            time.sleep(wait)
+        self._last_call_ts = time.time()
 
     def _headers(self) -> Dict[str, str]:
         return {
@@ -57,7 +70,9 @@ class OpenRouterClient:
         if status == 402:
             return "OpenRouter reports insufficient credits (402). Free :free models should not need credits."
         if status == 429:
-            return "OpenRouter rate limit hit (429). Free-tier limits are roughly 20 requests/min."
+            return ("OpenRouter rate limit hit (429). Free tier is roughly 20 requests/min "
+                    "and resets each minute — the client paces requests and retries "
+                    "patiently, so just wait it out.")
         try:
             msg = json.loads(body).get("error", {}).get("message", "")
             if msg:
@@ -74,13 +89,16 @@ class OpenRouterClient:
         temperature: float = 0.7,
         stream: bool = False,
         on_token: Optional[Callable[[str], None]] = None,
-        retries: int = 3,
+        on_wait: Optional[Callable[[str], None]] = None,
+        retries: Optional[int] = None,
     ) -> str:
         """Run a chat completion. Returns the full assistant text.
 
         With stream=True, calls on_token(chunk) for each streamed piece.
-        Retries a few times on 429s with backoff.
+        Requests are paced (~3s apart) and 429s are retried with backoff,
+        calling on_wait(status_message) while waiting.
         """
+        max_retries = self.max_retries if retries is None else retries
         payload = {
             "model": model,
             "messages": messages,
@@ -89,7 +107,8 @@ class OpenRouterClient:
             "stream": stream,
         }
         last_err: Optional[OpenRouterError] = None
-        for attempt in range(retries + 1):
+        for attempt in range(max_retries + 1):
+            self._pace()
             try:
                 resp = requests.post(
                     f"{self.base_url}/chat/completions",
@@ -102,10 +121,16 @@ class OpenRouterClient:
                 last_err = OpenRouterError(f"Network error talking to OpenRouter: {e}")
                 time.sleep(1 + attempt)
                 continue
-            if resp.status_code == 429 and attempt < retries:
-                wait = int(resp.headers.get("Retry-After", 2 + attempt * 3))
-                time.sleep(wait)
+            if resp.status_code == 429 and attempt < max_retries:
+                try:
+                    wait = int(resp.headers.get("Retry-After", 0)) or min(60, 5 * (2 ** attempt))
+                except (TypeError, ValueError):
+                    wait = min(60, 5 * (2 ** attempt))
                 last_err = OpenRouterError(self._friendly_error(429, resp.text), 429)
+                if on_wait:
+                    on_wait(f"Rate limited (429) — waiting {wait}s before retry "
+                            f"{attempt + 1}/{max_retries}…")
+                time.sleep(wait)
                 continue
             if resp.status_code != 200:
                 raise OpenRouterError(self._friendly_error(resp.status_code, resp.text), resp.status_code)
