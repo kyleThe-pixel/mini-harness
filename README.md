@@ -88,6 +88,25 @@ harness/
   requirements.txt     # flask, requests
 ```
 
+## Pooling API keys (group gateway)
+
+Run one server for the whole group. Put each person's **own** OpenRouter key in the
+server env (comma-separated):
+
+```bash
+OPENROUTER_API_KEYS=sk-or-v1-aaa,sk-or-v1-bbb,sk-or-v1-ccc
+```
+
+The gateway routes requests round-robin across keys, each paced independently
+(~3s apart, so N keys ≈ N×18 req/min). A 429 on one key just rotates to the next —
+throttled keys cool down in the background and rejoin automatically. Limits are per
+OpenRouter account, so each person's key contributes their own quota.
+
+- `GET /api/pool` shows key count and throttled state (key fingerprints only —
+  full keys never leave the server).
+- The header shows `🔑 ×N pooled` when the server holds pooled keys.
+- No per-user caps, no auth — it's a trusted-group tool. Don't expose it to the internet.
+
 ## Notes & limits
 
 - Free-tier rate limits are roughly 20 req/min per model — the client paces requests (~3s
