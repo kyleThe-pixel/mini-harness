@@ -33,6 +33,38 @@ def _client(api_key: str, settings: Settings) -> OpenRouterClient:
                             timeout=settings.request_timeout)
 
 
+# One KeyPool shared by every request thread, so pacing and throttle state
+# are global. Built once from the server's env keys.
+_pool = None
+_pool_lock = threading.Lock()
+
+
+def _shared_pool(settings: Settings):
+    global _pool
+    with _pool_lock:
+        if _pool is None and settings.api_keys:
+            from harness.keypool import KeyPool
+            _pool = KeyPool(settings.api_keys)
+        return _pool
+
+
+def _openrouter_client(key: str, settings: Settings) -> OpenRouterClient:
+    """Client backed by the shared pooled keys, or a single request key."""
+    pool = _shared_pool(settings)
+    if pool is None:
+        single = (key or settings.api_key or "").strip()
+        if not single:
+            raise OpenRouterError(
+                "No OpenRouter API key. Add one in the web UI (stored only in your "
+                "browser) or set OPENROUTER_API_KEY / OPENROUTER_API_KEYS in a .env "
+                "file. Free keys at https://openrouter.ai/keys")
+        from harness.keypool import KeyPool
+        pool = KeyPool([single])
+    return OpenRouterClient(pool=pool, base_url=settings.base_url,
+                            app_name=settings.app_name,
+                            timeout=settings.request_timeout)
+
+
 def _resolve_client(key: str, settings: Settings, body: dict):
     """Pick OpenRouter or a local server based on the request (falls back to env)."""
     provider = (body.get("provider") or settings.provider or "openrouter").lower()
@@ -40,7 +72,7 @@ def _resolve_client(key: str, settings: Settings, body: dict):
         from harness.local import LocalClient
         return LocalClient(body.get("local_url") or settings.local_url,
                            timeout=settings.request_timeout), "local"
-    return _client(key, settings), "openrouter"
+    return _openrouter_client(key, settings), "openrouter"
 
 
 def _resolve_model(settings: Settings, body: dict, provider: str) -> str:
@@ -109,7 +141,7 @@ def models():
             "local_url": local_url,
         })
     try:
-        client = _client(key, settings)
+        client = _openrouter_client(key, settings)
         free = client.list_free_models()
     except OpenRouterError:
         from harness.config import FALLBACK_FREE_MODELS
@@ -118,8 +150,19 @@ def models():
         "provider": "openrouter",
         "models": [{"id": mid, "label": label} for mid, label in free],
         "default": settings.default_model,
-        "key_configured": bool(key or settings.api_key),
+        "key_configured": bool(key or settings.api_key or settings.api_keys),
     })
+
+
+# -- key pool status ---------------------------------------------------------
+@app.get("/api/pool")
+def pool_info():
+    """How many pooled keys the gateway holds (fingerprints only, never keys)."""
+    settings = _settings(request.args.get("key", ""))
+    pool = _shared_pool(settings)
+    if pool is None:
+        return jsonify({"keys": 0, "throttled": 0, "fingerprints": []})
+    return jsonify(pool.status())
 
 
 # -- single-agent chat ------------------------------------------------------
