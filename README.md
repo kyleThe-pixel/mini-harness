@@ -97,6 +97,32 @@ harness/
   machines you trust, and keep the workspace separate from anything precious.
 - The UI has no login; don't expose port 5000 to the internet as-is.
 
+## Local models (no rate limits)
+
+Flip the provider dropdown in the UI header from **OpenRouter** to **Local** and the
+harness talks to any OpenAI-compatible server on your machine — no API key, no quotas.
+Set the server URL and model name in the header; every agent uses that model.
+
+**llama.cpp** (recommended for raw `.gguf` files) — grab `llama-server` from the
+[llama.cpp releases](https://github.com/ggerganov/llama.cpp/releases), then:
+
+```bat
+llama-server -m "C:\models\Bonsai-27B-GGUF\model.gguf" --port 8080 --ctx-size 16384 -ngl 99
+```
+
+**Ollama** — `ollama serve`, then `ollama run <model>`; the OpenAI endpoint is
+`http://localhost:11434/v1`. Custom GGUFs can be imported with a Modelfile
+(`ollama create mymodel -f Modelfile`).
+
+**LM Studio** — start its built-in server (`http://localhost:1234/v1`).
+
+Tips:
+- Give agents plenty of context: `--ctx-size 16384` or higher if you have the RAM.
+- Bigger models follow the tool protocol far better. A 27B-class model is the sweet
+  spot for missions; 1–3B models are fine for simple chat but get flaky on
+  multi-step tool loops.
+- Same knobs via env: `HARNESS_PROVIDER=local`, `HARNESS_LOCAL_URL`, `HARNESS_LOCAL_MODEL`.
+
 ## Roadmap
 
 See [ROADMAP.md](ROADMAP.md) — local Qwen/Ollama as a backup provider is the big one.
