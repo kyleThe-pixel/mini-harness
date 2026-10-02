@@ -25,10 +25,18 @@ No build step. No database. One Python server + one static web page.
    the `:free` models cost nothing).
 
 2. **Install & run:**
+   macOS / Linux:
    ```bash
    cd harness
    python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
    .venv/bin/python server.py
+   ```
+   Windows (cmd):
+   ```bat
+   cd harness
+   python -m venv .venv
+   .venv\Scripts\pip install -r requirements.txt
+   .venv\Scripts\python server.py
    ```
    Open http://localhost:5000
 
@@ -82,7 +90,9 @@ harness/
 
 ## Notes & limits
 
-- Free-tier rate limits are roughly 20 req/min per model — the client backs off on 429s.
+- Free-tier rate limits are roughly 20 req/min per model — the client paces requests (~3s
+  apart) and retries 429s with exponential backoff (up to 8 tries), so missions slow
+  down instead of dying. You'll see `⏳ Rate limited…` status lines in the UI while it waits.
 - `run_shell` is powerful by design (agents need to run code). Only run the server on
   machines you trust, and keep the workspace separate from anything precious.
 - The UI has no login; don't expose port 5000 to the internet as-is.
