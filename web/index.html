@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mini-harness — multi-agent AI</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <div class="brand">⚡ mini-harness</div>
+  <div class="header-controls">
+    <input id="apiKey" type="password" placeholder="OpenRouter API key (free)" autocomplete="off">
+    <button id="saveKey" title="Save key in this browser only">save</button>
+    <button id="refreshModels" title="Reload free model list">↻ models</button>
+  </div>
+</header>
+
+<nav class="tabs">
+  <button data-tab="mission" class="active">Team mission</button>
+  <button data-tab="chat">Solo chat</button>
+  <button data-tab="files">Workspace files</button>
+</nav>
+
+<main>
+  <!-- ============ MISSION ============ -->
+  <section id="tab-mission" class="tab active">
+    <div class="mission-setup">
+      <label>Mission goal
+        <textarea id="goal" rows="3" placeholder="e.g. Build a tiny python CLI that converts CSV to JSON, with tests."></textarea>
+      </label>
+      <div class="agent-list-header">
+        <span>Agents <small>(first one is the team lead)</small></span>
+        <button id="addAgent">+ add agent</button>
+      </div>
+      <div id="agentRows"></div>
+      <div class="mission-actions">
+        <label>rounds <input id="maxRounds" type="number" value="4" min="1" max="8"></label>
+        <button id="launch" class="primary">▶ Launch mission</button>
+        <span id="missionStatus" class="status"></span>
+      </div>
+    </div>
+    <div id="teamBoard" class="team-board"></div>
+    <div id="missionSummary" class="summary hidden"></div>
+  </section>
+
+  <!-- ============ CHAT ============ -->
+  <section id="tab-chat" class="tab">
+    <div class="chat-controls">
+      <select id="chatModel"></select>
+      <button id="clearChat">clear</button>
+    </div>
+    <div id="chatLog" class="chat-log"></div>
+    <form id="chatForm" class="chat-form">
+      <input id="chatInput" type="text" placeholder="Ask the agent to do something with files…" autocomplete="off">
+      <button type="submit" class="primary">send</button>
+    </form>
+  </section>
+
+  <!-- ============ FILES ============ -->
+  <section id="tab-files" class="tab">
+    <div class="files-layout">
+      <div class="file-tree-pane">
+        <div class="pane-head">workspace <button id="reloadFiles" title="reload">↻</button></div>
+        <div id="fileTree" class="file-tree"></div>
+      </div>
+      <div class="file-view-pane">
+        <div id="filePath" class="pane-head">—</div>
+        <pre id="fileContent" class="file-content">Select a file to view it.</pre>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer>
+  Free models via <a href="https://openrouter.ai/keys" target="_blank" rel="noopener">OpenRouter</a> ·
+  key stays in your browser · agents work inside <code>workspace/</code>
+</footer>
+
+<script src="app.js"></script>
+</body>
+</html>
