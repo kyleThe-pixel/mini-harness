@@ -83,7 +83,24 @@ async function loadModels() {
     console.warn("model list failed", e);
   }
 }
-$("refreshModels").addEventListener("click", loadModels);
+$("refreshModels").addEventListener("click", () => { loadModels(); loadPool(); });
+
+/* ---------- key pool ---------- */
+async function loadPool() {
+  try {
+    const r = await fetch("/api/pool");
+    const d = await r.json();
+    const el = $("poolInfo");
+    if (d.keys > 0) {
+      el.textContent = d.keys > 1 ? `🔑 ×${d.keys} pooled` : "🔑 ×1";
+      el.title = "Pooled keys: " + (d.fingerprints || []).join(", ") +
+        (d.throttled ? ` (${d.throttled} throttled)` : "");
+    } else {
+      el.textContent = "";
+      el.title = "";
+    }
+  } catch (e) { /* pool endpoint optional */ }
+}
 
 /* ---------- SSE helper (POST with streaming body) ---------- */
 async function streamPost(url, body, onEvent) {
@@ -307,3 +324,4 @@ $("reloadFiles").addEventListener("click", loadFiles);
 /* ---------- init ---------- */
 DEFAULT_AGENTS.forEach(addAgent);
 loadModels();
+loadPool();
