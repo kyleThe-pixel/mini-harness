@@ -33,6 +33,22 @@ def _client(api_key: str, settings: Settings) -> OpenRouterClient:
                             timeout=settings.request_timeout)
 
 
+def _resolve_client(key: str, settings: Settings, body: dict):
+    """Pick OpenRouter or a local server based on the request (falls back to env)."""
+    provider = (body.get("provider") or settings.provider or "openrouter").lower()
+    if provider == "local":
+        from harness.local import LocalClient
+        return LocalClient(body.get("local_url") or settings.local_url,
+                           timeout=settings.request_timeout), "local"
+    return _client(key, settings), "openrouter"
+
+
+def _resolve_model(settings: Settings, body: dict, provider: str) -> str:
+    if provider == "local":
+        return body.get("model") or settings.local_model or "default"
+    return body.get("model") or settings.default_model
+
+
 def _sse(responses: "queue.Queue[str]"):
     """Yield queued JSON payloads as server-sent events."""
     while True:
@@ -76,6 +92,22 @@ def index():
 def models():
     key = request.args.get("key", "")
     settings = _settings(key)
+    provider = (request.args.get("provider") or settings.provider or "openrouter").lower()
+    if provider == "local":
+        from harness.local import LocalClient
+        local_url = request.args.get("local_url") or settings.local_url
+        names = LocalClient(local_url).list_models()
+        if settings.local_model and settings.local_model not in names:
+            names.insert(0, settings.local_model)
+        if not names:
+            names = [settings.local_model or "default"]
+        return jsonify({
+            "provider": "local",
+            "models": [{"id": n, "label": f"{n} (local)"} for n in names],
+            "default": names[0],
+            "key_configured": True,
+            "local_url": local_url,
+        })
     try:
         client = _client(key, settings)
         free = client.list_free_models()
@@ -83,6 +115,7 @@ def models():
         from harness.config import FALLBACK_FREE_MODELS
         free = list(FALLBACK_FREE_MODELS)
     return jsonify({
+        "provider": "openrouter",
         "models": [{"id": mid, "label": label} for mid, label in free],
         "default": settings.default_model,
         "key_configured": bool(key or settings.api_key),
@@ -94,14 +127,14 @@ def models():
 def chat():
     body = request.get_json(force=True) or {}
     message = body.get("message", "").strip()
-    model = body.get("model") or Settings.from_env().default_model
     key = body.get("key", "")
     if not message:
         return jsonify({"error": "empty message"}), 400
     settings = _settings(key)
 
     def target(emit):
-        client = _client(key, settings)
+        client, provider = _resolve_client(key, settings, body)
+        model = _resolve_model(settings, body, provider)
         registry = ToolRegistry(settings.workspace)
         agent = Agent("solo", "helpful assistant", model, client, registry,
                       max_inner_iters=settings.max_inner_iters)
@@ -126,7 +159,10 @@ def mission():
     settings = _settings(key)
 
     def target(emit):
-        client = _client(key, settings)
+        client, provider = _resolve_client(key, settings, body)
+        default_model = _resolve_model(settings, body, provider)
+        for s in specs:
+            s["model"] = s.get("model") or default_model
         registry = ToolRegistry(settings.workspace)
         team = Team(client, registry,
                     max_inner_iters=settings.max_inner_iters,
