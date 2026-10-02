@@ -138,6 +138,43 @@ def test_team_routes_messages():
         assert "hello.py" in result["summary"]
 
 
+def test_429_retries_then_succeeds():
+    import harness.openrouter as or_mod
+
+    calls = {"n": 0}
+    waits = []
+
+    class Fake429:
+        status_code = 429
+        headers = {}
+        text = "rate limited"
+
+    class FakeOK:
+        status_code = 200
+        headers = {}
+
+        def json(self):
+            return {"choices": [{"message": {"content": "hi"}}]}
+
+    def fake_post(*a, **k):
+        calls["n"] += 1
+        return FakeOK() if calls["n"] > 2 else Fake429()
+
+    orig_post, orig_sleep = or_mod.requests.post, or_mod.time.sleep
+    or_mod.requests.post = fake_post
+    or_mod.time.sleep = lambda s: waits.append(s)
+    try:
+        c = or_mod.OpenRouterClient("key", min_interval=0)
+        c.max_retries = 5
+        assert c.chat([{"role": "user", "content": "hi"}], "m",
+                       on_wait=lambda m: waits.append(m)) == "hi"
+        assert calls["n"] == 3, calls
+        assert any("Rate limited" in str(w) for w in waits), waits
+    finally:
+        or_mod.requests.post = orig_post
+        or_mod.time.sleep = orig_sleep
+
+
 if __name__ == "__main__":
     for name, fn in sorted({k: v for k, v in globals().items() if k.startswith("test_")}.items()):
         fn()
