@@ -32,6 +32,10 @@ class Settings:
     request_timeout: int = 120
     max_inner_iters: int = 8
     max_rounds: int = 4
+    # Local provider (Ollama / llama.cpp / LM Studio). "openrouter" or "local".
+    provider: str = "openrouter"
+    local_url: str = "http://localhost:8080/v1"
+    local_model: str = ""
 
     @classmethod
     def from_env(cls, api_key_override: str = "") -> "Settings":
@@ -50,4 +54,7 @@ class Settings:
             workspace=os.environ.get("HARNESS_WORKSPACE", "workspace"),
             app_name=os.environ.get("HARNESS_APP_NAME", "mini-harness"),
             default_model=os.environ.get("HARNESS_DEFAULT_MODEL", "qwen/qwen3-coder:free"),
+            provider=os.environ.get("HARNESS_PROVIDER", "openrouter"),
+            local_url=os.environ.get("HARNESS_LOCAL_URL", "http://localhost:8080/v1"),
+            local_model=os.environ.get("HARNESS_LOCAL_MODEL", ""),
         )
