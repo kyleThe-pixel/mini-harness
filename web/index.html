@@ -10,9 +10,19 @@
 <header>
   <div class="brand">⚡ mini-harness</div>
   <div class="header-controls">
-    <input id="apiKey" type="password" placeholder="OpenRouter API key (free)" autocomplete="off">
-    <button id="saveKey" title="Save key in this browser only">save</button>
-    <button id="refreshModels" title="Reload free model list">↻ models</button>
+    <select id="provider" title="model provider">
+      <option value="openrouter">OpenRouter</option>
+      <option value="local">Local</option>
+    </select>
+    <span id="openrouterConfig" class="header-controls">
+      <input id="apiKey" type="password" placeholder="OpenRouter API key (free)" autocomplete="off">
+      <button id="saveKey" title="Save key in this browser only">save</button>
+    </span>
+    <span id="localConfig" class="header-controls hidden">
+      <input id="localUrl" placeholder="server URL" title="local server URL">
+      <input id="localModel" placeholder="model name" title="local model name">
+    </span>
+    <button id="refreshModels" title="Reload model list">↻ models</button>
   </div>
 </header>
 
