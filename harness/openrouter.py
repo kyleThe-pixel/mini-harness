@@ -1,17 +1,20 @@
-"""Minimal OpenRouter client (chat completions + model listing).
+"""OpenRouter client with multi-key routing.
 
-Uses the OpenAI-compatible /chat/completions endpoint so any OpenRouter
-model — including the free :free tier — works through one code path.
+Give it one key or many. With several keys (e.g. a group pooling each
+person's own account quota), requests rotate round-robin across keys, each
+paced independently. A 429 on one key just reroutes to the next while the
+throttled key cools down — callers only wait when every key is throttled.
 """
 from __future__ import annotations
 
 import json
 import time
-from typing import Callable, Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional
 
 import requests
 
 from .config import FALLBACK_FREE_MODELS, OPENROUTER_BASE_URL
+from .keypool import KeyPool, fingerprint
 
 
 class OpenRouterError(Exception):
@@ -22,43 +25,45 @@ class OpenRouterError(Exception):
         self.status = status
 
 
+_NO_KEY_MSG = (
+    "No OpenRouter API key. Add one in the web UI (stored only in your "
+    "browser) or set OPENROUTER_API_KEY / OPENROUTER_API_KEYS in a .env file. "
+    "Free keys at https://openrouter.ai/keys"
+)
+
+
 class OpenRouterClient:
-    """Thin wrapper over OpenRouter's chat API with retry + streaming."""
+    """Thin wrapper over OpenRouter's chat API with key rotation + streaming."""
 
     def __init__(
         self,
-        api_key: str,
+        api_key: str = "",
+        api_keys: Optional[List[str]] = None,
+        pool: Optional[KeyPool] = None,
         base_url: str = OPENROUTER_BASE_URL,
         app_name: str = "mini-harness",
         timeout: int = 120,
         min_interval: float = 3.2,
         max_retries: int = 8,
     ):
-        if not api_key:
-            raise OpenRouterError(
-                "No OpenRouter API key. Add one in the web UI (stored only in your "
-                "browser) or set OPENROUTER_API_KEY in a .env file. Free keys at "
-                "https://openrouter.ai/keys"
-            )
-        self.api_key = api_key
+        if pool is not None:
+            self.pool = pool
+        else:
+            keys = list(api_keys) if api_keys else []
+            if api_key:
+                keys.append(api_key)
+            keys = [k.strip() for k in keys if k and k.strip()]
+            if not keys:
+                raise OpenRouterError(_NO_KEY_MSG)
+            self.pool = KeyPool(keys, min_interval=min_interval)
         self.base_url = base_url.rstrip("/")
         self.app_name = app_name
         self.timeout = timeout
-        # Pacing + retries keep missions alive under the free-tier ~20 req/min limit.
-        self.min_interval = min_interval
         self.max_retries = max_retries
-        self._last_call_ts = 0.0
 
-    def _pace(self):
-        """Space requests out so we stay under the per-minute rate limit."""
-        wait = self.min_interval - (time.time() - self._last_call_ts)
-        if wait > 0:
-            time.sleep(wait)
-        self._last_call_ts = time.time()
-
-    def _headers(self) -> Dict[str, str]:
+    def _headers(self, key: str) -> Dict[str, str]:
         return {
-            "Authorization": f"Bearer {self.api_key}",
+            "Authorization": f"Bearer {key}",
             "Content-Type": "application/json",
             "HTTP-Referer": "http://localhost:5000",
             "X-Title": self.app_name,
@@ -95,8 +100,8 @@ class OpenRouterClient:
         """Run a chat completion. Returns the full assistant text.
 
         With stream=True, calls on_token(chunk) for each streamed piece.
-        Requests are paced (~3s apart) and 429s are retried with backoff,
-        calling on_wait(status_message) while waiting.
+        Requests rotate across the key pool; a 429 reroutes to the next key
+        and on_wait(status_message) fires while waiting.
         """
         max_retries = self.max_retries if retries is None else retries
         payload = {
@@ -108,11 +113,15 @@ class OpenRouterClient:
         }
         last_err: Optional[OpenRouterError] = None
         for attempt in range(max_retries + 1):
-            self._pace()
+            key, wait = self.pool.acquire()
+            if wait > 0:
+                if on_wait:
+                    on_wait(f"All {self.pool.size} keys throttled — waiting {wait:.0f}s…")
+                time.sleep(wait)
             try:
                 resp = requests.post(
                     f"{self.base_url}/chat/completions",
-                    headers=self._headers(),
+                    headers=self._headers(key),
                     json=payload,
                     timeout=self.timeout,
                     stream=stream,
@@ -121,23 +130,21 @@ class OpenRouterClient:
                 last_err = OpenRouterError(f"Network error talking to OpenRouter: {e}")
                 time.sleep(1 + attempt)
                 continue
-            if resp.status_code == 429 and attempt < max_retries:
+            if resp.status_code == 429:
                 try:
-                    wait = int(resp.headers.get("Retry-After", 0)) or min(60, 5 * (2 ** attempt))
+                    wait_s = int(resp.headers.get("Retry-After", 0)) or min(60, 5 * (2 ** attempt))
                 except (TypeError, ValueError):
-                    wait = min(60, 5 * (2 ** attempt))
+                    wait_s = min(60, 5 * (2 ** attempt))
+                self.pool.report_throttled(key, wait_s)
                 last_err = OpenRouterError(self._friendly_error(429, resp.text), 429)
                 if on_wait:
-                    on_wait(f"Rate limited (429) — waiting {wait}s before retry "
-                            f"{attempt + 1}/{max_retries}…")
-                time.sleep(wait)
+                    on_wait(f"Key {fingerprint(key)} rate limited — rotating to next key…")
                 continue
+            self.pool.report_ok(key)
             if resp.status_code != 200:
                 raise OpenRouterError(self._friendly_error(resp.status_code, resp.text), resp.status_code)
             if not stream:
-                data = resp.json()
-                return data["choices"][0]["message"]["content"] or ""
-            # Streaming path: parse SSE chunks.
+                return resp.json()["choices"][0]["message"]["content"] or ""
             full: List[str] = []
             for line in resp.iter_lines(decode_unicode=True):
                 if not line or not line.startswith("data:"):
@@ -146,11 +153,9 @@ class OpenRouterClient:
                 if chunk == "[DONE]":
                     break
                 try:
-                    delta = json.loads(chunk)["choices"][0]["delta"]
+                    piece = json.loads(chunk)["choices"][0]["delta"].get("content") or ""
                 except Exception:
                     continue
-                piece = delta.get("content") or ""
-                # Some providers put tool calls here; we use a text protocol instead.
                 if piece:
                     full.append(piece)
                     if on_token:
@@ -158,14 +163,15 @@ class OpenRouterClient:
             return "".join(full)
         raise last_err or OpenRouterError("OpenRouter request failed after retries")
 
-    def list_free_models(self) -> List[Tuple[str, str]]:
+    def list_free_models(self) -> List[tuple]:
         """Return [(model_id, label)] for currently-free models, live from OpenRouter."""
+        key, _ = self.pool.acquire()
         try:
             resp = requests.get(
-                f"{self.base_url}/models", headers=self._headers(), timeout=30
+                f"{self.base_url}/models", headers=self._headers(key), timeout=30
             )
             resp.raise_for_status()
-            out: List[Tuple[str, str]] = []
+            out: List[tuple] = []
             for m in resp.json().get("data", []):
                 pricing = m.get("pricing", {}) or {}
                 try:
