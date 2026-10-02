@@ -135,6 +135,7 @@ function feedHtml(ev) {
   if (ev.type === "agent_message")
     return `<div class="msg">💬 → <b>${esc(ev.to)}</b>: ${esc(ev.text).slice(0, 400)}</div>`;
   if (ev.type === "error") return `<div class="tool" style="color:var(--red)">⚠ ${esc(ev.text)}</div>`;
+  if (ev.type === "status") return `<div class="tool" style="color:var(--amber)">⏳ ${esc(ev.text)}</div>`;
   return "";
 }
 
@@ -221,6 +222,7 @@ $("chatForm").addEventListener("submit", async (e) => {
       else if (ev.type === "tool_call")
         body.innerHTML += `<div class="tool">🔧 ${esc(ev.tool)} ${esc(JSON.stringify(ev.args)).slice(0, 200)}</div>`;
       else if (ev.type === "error") body.innerHTML += `<div class="tool" style="color:var(--red)">⚠ ${esc(ev.text)}</div>`;
+      else if (ev.type === "status") body.innerHTML += `<div class="tool" style="color:var(--amber)">⏳ ${esc(ev.text)}</div>`;
       $("chatLog").scrollTop = $("chatLog").scrollHeight;
     });
   } catch (err) {
