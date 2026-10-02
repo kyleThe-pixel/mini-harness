@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass, field
+from typing import List
 
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 
@@ -36,6 +37,9 @@ class Settings:
     provider: str = "openrouter"
     local_url: str = "http://localhost:8080/v1"
     local_model: str = ""
+    # Pooled OpenRouter keys for the group gateway. Each person's own key
+    # contributes their own account quota; requests rotate across keys.
+    api_keys: List[str] = field(default_factory=list)
 
     @classmethod
     def from_env(cls, api_key_override: str = "") -> "Settings":
@@ -48,8 +52,10 @@ class Settings:
                     if line and not line.startswith("#") and "=" in line:
                         k, v = line.split("=", 1)
                         os.environ.setdefault(k.strip(), v.strip().strip('"').strip("'"))
+        raw_keys = os.environ.get("OPENROUTER_API_KEYS", "") or os.environ.get("OPENROUTER_API_KEY", "")
         return cls(
             api_key=api_key_override or os.environ.get("OPENROUTER_API_KEY", ""),
+            api_keys=[k.strip() for k in raw_keys.replace("\n", ",").split(",") if k.strip()],
             base_url=os.environ.get("OPENROUTER_BASE_URL", OPENROUTER_BASE_URL),
             workspace=os.environ.get("HARNESS_WORKSPACE", "workspace"),
             app_name=os.environ.get("HARNESS_APP_NAME", "mini-harness"),
