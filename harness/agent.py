@@ -102,6 +102,7 @@ class Agent:
                     self.model,
                     stream=True,
                     on_token=lambda t: emit({"type": "token", "text": t}),
+                    on_wait=lambda m: emit({"type": "status", "text": m}),
                 )
             except Exception as e:
                 emit({"type": "error", "text": str(e)})
