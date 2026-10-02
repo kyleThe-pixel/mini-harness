@@ -4,6 +4,10 @@
 - [x] **Local models provider** (2026-10-02): `harness/local.py` + provider switch in the
   UI. Works with llama.cpp `llama-server`, Ollama, LM Studio — anything OpenAI-compatible.
   No key, no rate limits.
+- [x] **Pooled multi-key routing** (2026-10-02): `harness/keypool.py` — one server-wide
+  KeyPool, round-robin across each person's own OpenRouter key with per-key pacing and
+  automatic throttle cool-down. `GET /api/pool` status, header indicator. No per-user
+  caps, no auth (trusted group).
 
 ## Near-term
 - [ ] Per-agent system-prompt editing in the UI
