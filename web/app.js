@@ -2,11 +2,17 @@
 const $ = (id) => document.getElementById(id);
 const state = {
   key: localStorage.getItem("harness_key") || "",
+  provider: localStorage.getItem("harness_provider") || "openrouter",
+  localUrl: localStorage.getItem("harness_local_url") || "http://localhost:8080/v1",
+  localModel: localStorage.getItem("harness_local_model") || "",
   models: [],
   running: false,
 };
 
 function apiKey() { return $("apiKey").value.trim() || state.key; }
+function provider() { return state.provider; }
+function localUrl() { return $("localUrl").value.trim() || state.localUrl; }
+function localModel() { return $("localModel").value.trim() || state.localModel || "default"; }
 function headers() { return { "Content-Type": "application/json" }; }
 
 /* ---------- tabs ---------- */
@@ -20,6 +26,32 @@ document.querySelectorAll(".tabs button").forEach((b) => {
   });
 });
 
+/* ---------- provider ---------- */
+function toggleProviderUI() {
+  const local = state.provider === "local";
+  $("localConfig").classList.toggle("hidden", !local);
+  $("openrouterConfig").classList.toggle("hidden", local);
+  document.querySelectorAll(".agent-model").forEach((s) => (s.disabled = local));
+}
+$("provider").value = state.provider;
+$("localUrl").value = state.localUrl;
+$("localModel").value = state.localModel;
+$("provider").addEventListener("change", () => {
+  state.provider = $("provider").value;
+  localStorage.setItem("harness_provider", state.provider);
+  toggleProviderUI();
+  loadModels();
+});
+$("localUrl").addEventListener("change", () => {
+  state.localUrl = $("localUrl").value.trim() || state.localUrl;
+  localStorage.setItem("harness_local_url", state.localUrl);
+});
+$("localModel").addEventListener("change", () => {
+  state.localModel = $("localModel").value.trim();
+  localStorage.setItem("harness_local_model", state.localModel);
+});
+toggleProviderUI();
+
 /* ---------- api key + models ---------- */
 $("apiKey").value = state.key;
 $("saveKey").addEventListener("click", () => {
@@ -32,7 +64,8 @@ $("saveKey").addEventListener("click", () => {
 
 async function loadModels() {
   try {
-    const r = await fetch("/api/models?key=" + encodeURIComponent(apiKey()));
+    const q = new URLSearchParams({ provider: provider(), key: apiKey(), local_url: localUrl() });
+    const r = await fetch("/api/models?" + q.toString());
     const d = await r.json();
     state.models = d.models || [];
     const opts = state.models
@@ -143,10 +176,11 @@ $("launch").addEventListener("click", async () => {
   if (state.running) return;
   const goal = $("goal").value.trim();
   if (!goal) { alert("Describe the mission goal first."); return; }
+  const isLocal = provider() === "local";
   const specs = [...document.querySelectorAll(".agent-row")].map((r) => ({
     name: r.querySelector(".agent-name").value.trim() || "agent",
     role: r.querySelector(".agent-role").value.trim() || "team member",
-    model: r.querySelector(".agent-model").value,
+    model: isLocal ? localModel() : r.querySelector(".agent-model").value,
   }));
   if (!specs.length) { alert("Add at least one agent."); return; }
 
@@ -162,6 +196,8 @@ $("launch").addEventListener("click", async () => {
   try {
     await streamPost("/api/mission", {
       goal, agents: specs, key: apiKey(),
+      provider: provider(), local_url: localUrl(),
+      model: isLocal ? localModel() : undefined,
       max_rounds: parseInt($("maxRounds").value) || 4,
     }, (ev) => {
       if (ev.type === "token" && ev.agent) {
@@ -217,7 +253,12 @@ $("chatForm").addEventListener("submit", async (e) => {
   state.running = true;
   const body = chatMsg("agent", "");
   try {
-    await streamPost("/api/chat", { message: text, model: $("chatModel").value, key: apiKey() }, (ev) => {
+    const isLocal = provider() === "local";
+    await streamPost("/api/chat", {
+      message: text,
+      model: isLocal ? localModel() : $("chatModel").value,
+      key: apiKey(), provider: provider(), local_url: localUrl(),
+    }, (ev) => {
       if (ev.type === "token") body.textContent += ev.text;
       else if (ev.type === "tool_call")
         body.innerHTML += `<div class="tool">🔧 ${esc(ev.tool)} ${esc(JSON.stringify(ev.args)).slice(0, 200)}</div>`;
