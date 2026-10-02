@@ -1,4 +1,5 @@
 """Tests for the harness core: protocol parsing, sandbox, tools, agent loop, team."""
+import json
 import os
 import sys
 import tempfile
@@ -173,6 +174,55 @@ def test_429_retries_then_succeeds():
     finally:
         or_mod.requests.post = orig_post
         or_mod.time.sleep = orig_sleep
+
+
+def test_local_client_against_fake_server():
+    import threading
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+
+    sse_body = ('data: {"choices":[{"delta":{"content":"hel"}}]}\n\n'
+                'data: {"choices":[{"delta":{"content":"lo"}}]}\n\n'
+                'data: [DONE]\n\n')
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self):
+            length = int(self.headers.get("Content-Length", 0))
+            body = json.loads(self.rfile.read(length) or b"{}")
+            if body.get("stream"):
+                data = sse_body.encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "text/event-stream")
+            else:
+                data = json.dumps({"choices": [{"message": {"content": "hi"}}]}).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+
+        def log_message(self, *a):
+            pass
+
+    import harness.local as local_mod
+    srv = HTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        c = local_mod.LocalClient(f"http://127.0.0.1:{srv.server_port}/v1", timeout=10)
+        assert c.chat([{"role": "user", "content": "hi"}], "m") == "hi"
+        toks = []
+        out = c.chat([{"role": "user", "content": "hi"}], "m",
+                     stream=True, on_token=toks.append)
+        assert out == "hello" and toks == ["hel", "lo"], (out, toks)
+    finally:
+        srv.shutdown()
+
+    # unreachable server -> friendly LocalError, not a raw exception
+    c2 = local_mod.LocalClient("http://127.0.0.1:1/v1", timeout=2)
+    try:
+        c2.chat([{"role": "user", "content": "hi"}], "m", retries=0)
+        raise AssertionError("should have raised")
+    except local_mod.LocalError as e:
+        assert "Cannot reach local server" in str(e)
 
 
 if __name__ == "__main__":
