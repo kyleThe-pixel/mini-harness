@@ -167,10 +167,13 @@ def test_429_retries_then_succeeds():
     try:
         c = or_mod.OpenRouterClient("key", min_interval=0)
         c.max_retries = 5
+        msgs = []
         assert c.chat([{"role": "user", "content": "hi"}], "m",
-                       on_wait=lambda m: waits.append(m)) == "hi"
+                       on_wait=msgs.append) == "hi"
         assert calls["n"] == 3, calls
-        assert any("Rate limited" in str(w) for w in waits), waits
+        # single key: 429 -> marked throttled -> wait out cool-down -> retry
+        assert any("rotating" in m for m in msgs), msgs
+        assert any("throttled" in m for m in msgs), msgs
     finally:
         or_mod.requests.post = orig_post
         or_mod.time.sleep = orig_sleep
@@ -223,6 +226,69 @@ def test_local_client_against_fake_server():
         raise AssertionError("should have raised")
     except local_mod.LocalError as e:
         assert "Cannot reach local server" in str(e)
+
+
+def test_keypool_round_robin_and_throttle():
+    from harness.keypool import KeyPool
+    p = KeyPool(["k1", "k2"], min_interval=0)
+    k1, w1 = p.acquire()
+    k2, w2 = p.acquire()
+    assert (k1, k2) == ("k1", "k2") and w1 == 0 and w2 == 0, (k1, k2, w1, w2)
+    k3, _ = p.acquire()
+    assert k3 == "k1"  # least-recently-used first
+    p.report_throttled("k1", 60)
+    k4, w4 = p.acquire()
+    assert k4 == "k2" and w4 == 0  # k1 skipped while throttled
+    p.report_throttled("k2", 60)
+    k5, w5 = p.acquire()
+    assert w5 > 0  # everything throttled -> caller must wait
+    p.report_ok("k1")
+    k6, w6 = p.acquire()
+    assert k6 == "k1" and w6 == 0
+
+
+def test_keypool_pacing():
+    from harness.keypool import KeyPool
+    p = KeyPool(["only"], min_interval=10)
+    _, w1 = p.acquire()
+    _, w2 = p.acquire()
+    assert w1 == 0 and w2 > 9, (w1, w2)
+
+
+def test_client_rotates_to_next_key_on_429():
+    import harness.openrouter as or_mod
+
+    seen = []
+
+    class R429:
+        status_code = 429
+        headers = {}
+        text = "slow down"
+
+    class R200:
+        status_code = 200
+        headers = {}
+
+        def json(self):
+            return {"choices": [{"message": {"content": "done"}}]}
+
+    def fake_post(url, headers=None, **kw):
+        seen.append(headers["Authorization"])
+        return R429() if "AAA" in headers["Authorization"] else R200()
+
+    orig_post, orig_sleep = or_mod.requests.post, or_mod.time.sleep
+    or_mod.requests.post = fake_post
+    or_mod.time.sleep = lambda s: None
+    try:
+        c = or_mod.OpenRouterClient(api_keys=["AAA", "BBB"], min_interval=0)
+        out = c.chat([{"role": "user", "content": "hi"}], "m",
+                     on_wait=lambda m: None)
+        assert out == "done", out
+        assert len(seen) == 2 and "AAA" in seen[0] and "BBB" in seen[1], seen
+        assert c.pool.status()["throttled"] == 1  # AAA cooling down
+    finally:
+        or_mod.requests.post = orig_post
+        or_mod.time.sleep = orig_sleep
 
 
 if __name__ == "__main__":
