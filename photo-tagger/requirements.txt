@@ -1,0 +1,9 @@
+# Photo Tagger - local AI photo search
+# Install: pip install -r requirements.txt  (or run setup_tagger_v1.bat on Windows,
+# which reuses the Forge Neo portable Python instead)
+gradio>=4.0
+pillow
+pillow-heif      # iPhone HEIC support
+easyocr          # text-in-image detection (pulls torch)
+requests         # llama-server API backend
+transformers     # only needed for the local CLIP fallback backend
